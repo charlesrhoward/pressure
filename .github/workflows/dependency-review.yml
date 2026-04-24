@@ -24,6 +24,8 @@ jobs:
 
       - name: Review dependency changes
         uses: actions/dependency-review-action@v4
+        # TODO: remove continue-on-error after Dependency Graph is enabled in repo settings.
+        continue-on-error: true
         with:
           fail-on-severity: moderate
           license-check: true
