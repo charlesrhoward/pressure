@@ -1,0 +1,12 @@
+node_modules
+bun.lockb
+*.log
+.DS_Store
+pressure-report-*.md
+pressure-report-*.txt
+pressure-report-*.json
+pressure-snapshot-*.json
+pressure-monitor-*.csv
+pressure-diff-*.md
+pressure-diff-*.txt
+pressure-diff-*.json
