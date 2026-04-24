@@ -81,7 +81,7 @@ function handleDiff(options: CliOptions): void {
       : options.format === "text"
         ? diff
             .slice(0, 20)
-            .map((row) => `${row.name}: ${row.deltaBytes >= 0 ? "+" : ""}${row.deltaBytes} bytes (${row.trend})`)
+            .map((row) => `${row.name} ${row.metric}: ${row.deltaBytes >= 0 ? "+" : ""}${row.deltaBytes} bytes (${row.trend})`)
             .join("\n")
         : buildDiffMarkdown(diff, options.beforePath, options.afterPath);
 
@@ -102,14 +102,14 @@ async function handleReport(options: CliOptions, collector: ReturnType<typeof cr
 
   let latestSnapshot: VmmapSnapshot | undefined;
   try {
-    latestSnapshot = await collector.captureVmmap({ groupId: recording.target.id, pid: recording.target.pid });
+    latestSnapshot = await collector.captureVmmap({ groupId: recording.target.id, pid: recording.focusPid });
     recording.store.addVmmapSnapshot(recording.target.id, latestSnapshot);
   } catch {
     latestSnapshot = undefined;
   }
 
   const assessment = analyzeRisk(recording.series, {
-    vmmapDiff: recording.store.getLatestVmmapDiff(recording.target.id),
+    vmmapDiff: recording.store.getLatestVmmapDiff(recording.target.id, recording.focusPid),
   });
 
   const context: ReportContext = {
@@ -118,7 +118,7 @@ async function handleReport(options: CliOptions, collector: ReturnType<typeof cr
     assessment,
     sampleMs: options.sampleMs,
     collectorMode: collector.mode,
-    vmmapDiff: recording.store.getLatestVmmapDiff(recording.target.id),
+    vmmapDiff: recording.store.getLatestVmmapDiff(recording.target.id, recording.focusPid),
     latestSnapshot,
     generatedAt: Date.now(),
   };

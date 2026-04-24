@@ -102,4 +102,4 @@ bun run start -- diff --before before.json --after after.json --output diff.md
 
 - Some processes will not allow `vmmap` inspection without additional privileges.
 - The live process list depends on what the current user can see.
-- Lightweight private-memory values are currently estimates, not exact kernel-provided counters.
+- Lightweight live samples do not fabricate exact private-memory counters; capture `vmmap` snapshots when you need dirty/private region evidence.

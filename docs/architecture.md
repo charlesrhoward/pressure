@@ -52,7 +52,7 @@ Responsibilities:
 - produce diagnosis language
 - suggest next actions
 
-This layer is deliberately heuristic-first. It does not try to overclaim.
+This layer is deliberately evidence-first. It can flag suspicious growth, but it does not try to overclaim a confirmed leak from lightweight sampling alone.
 
 ## 4. Reporting Layer
 

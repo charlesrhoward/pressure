@@ -80,6 +80,7 @@ export interface VmmapSnapshot {
 
 export interface VmmapDiffRow {
   name: string;
+  metric: "dirty" | "resident" | "virtual";
   beforeBytes: number;
   afterBytes: number;
   deltaBytes: number;
@@ -89,8 +90,9 @@ export interface VmmapDiffRow {
 export interface IdleTestResult {
   active: boolean;
   startedAt: number;
-  baselinePrivateBytes: number | null;
-  latestPrivateBytes: number | null;
+  memoryKind: "private" | "resident";
+  baselineBytes: number | null;
+  latestBytes: number | null;
   recoveredBytes: number | null;
   recoveryRatio: number | null;
   outcome: "pending" | "recovered" | "not_recovered";

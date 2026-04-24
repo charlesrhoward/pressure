@@ -11,7 +11,7 @@ import type {
   VmmapSnapshot,
 } from "../types/domain.ts";
 import { slugify } from "../utils/format.ts";
-import { resolveTargetGroup } from "./processes.ts";
+import { resolveTargetGroup, resolveTargetProcess } from "./processes.ts";
 
 interface MockChildDefinition {
   pid: number;
@@ -150,6 +150,11 @@ class MockCollector implements Collector {
       throw new Error("Mock snapshot requested without a selected process.");
     }
 
+    const targetProcess = resolveTargetProcess(target, selector.pid);
+    if (!targetProcess) {
+      throw new Error("Mock snapshot requested for a process outside the selected group.");
+    }
+
     const regionDefinitions: Array<[string, number]> = [
       ["MALLOC_SMALL", 1240 + this.tick * 8],
       ["WebKit JS Heap", 812 + this.tick * 5],
@@ -169,7 +174,7 @@ class MockCollector implements Collector {
       .sort((left, right) => right.virtualBytes - left.virtualBytes);
 
     const raw = [
-      `Pressure mock vmmap summary for ${target.displayName}`,
+      `Pressure mock vmmap summary for ${targetProcess.name}`,
       "REGION TYPE                    [ VSIZE  RSDNT  DIRTY   SWAP]",
       ...regions.map((region) => {
         return `${region.name.padEnd(28)} [ ${toMegabytes(region.virtualBytes)} ${toMegabytes(region.residentBytes)} ${toMegabytes(region.dirtyBytes)} ${toMegabytes(region.swapBytes)} ]`;
@@ -177,10 +182,11 @@ class MockCollector implements Collector {
     ].join("\n");
 
     return {
-      pid: target.pid,
-      targetName: target.displayName,
+      pid: targetProcess.pid,
+      targetName:
+        targetProcess.pid === target.rootProcess.pid ? target.displayName : `${target.displayName} / ${targetProcess.name}`,
       capturedAt: Date.now(),
-      command: target.command,
+      command: targetProcess.command,
       raw,
       regions,
     };
