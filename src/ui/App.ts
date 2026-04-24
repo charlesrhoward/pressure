@@ -130,10 +130,15 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     backgroundColor: COLORS.panel,
     padding: 1,
   });
-  const headerText = new TextRenderable(renderer, {
+  const singleLineTextOptions = (fg: string) => ({
     content: "",
-    fg: COLORS.text,
+    fg,
+    height: 1,
+    truncate: true,
+    wrapMode: "none" as const,
   });
+
+  const headerText = new TextRenderable(renderer, singleLineTextOptions(COLORS.text));
   headerPanel.add(headerText);
 
   const bodyRow = new BoxRenderable(renderer, {
@@ -151,16 +156,10 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     gap: 0,
     title: PANEL_TITLES.processes,
   });
-  const searchRow = new TextRenderable(renderer, {
-    content: "",
-    fg: COLORS.muted,
-  });
+  const searchRow = new TextRenderable(renderer, singleLineTextOptions(COLORS.muted));
   processPanel.add(searchRow);
   const processRows = Array.from({ length: PROCESS_ROW_COUNT }, () => {
-    const row = new TextRenderable(renderer, {
-      content: "",
-      fg: COLORS.dim,
-    });
+    const row = new TextRenderable(renderer, singleLineTextOptions(COLORS.dim));
     processPanel.add(row);
     return row;
   });
@@ -175,10 +174,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     title: PANEL_TITLES.timeline,
   });
   const timelineRows = Array.from({ length: 8 }, () => {
-    const row = new TextRenderable(renderer, {
-      content: "",
-      fg: COLORS.text,
-    });
+    const row = new TextRenderable(renderer, singleLineTextOptions(COLORS.text));
     timelinePanel.add(row);
     return row;
   });
@@ -193,10 +189,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     title: PANEL_TITLES.diagnosis,
   });
   const diagnosisRows = Array.from({ length: 10 }, () => {
-    const row = new TextRenderable(renderer, {
-      content: "",
-      fg: COLORS.muted,
-    });
+    const row = new TextRenderable(renderer, singleLineTextOptions(COLORS.muted));
     diagnosisPanel.add(row);
     return row;
   });
@@ -215,10 +208,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     title: PANEL_TITLES.breakdown,
   });
   const breakdownRows = Array.from({ length: BREAKDOWN_ROW_COUNT }, () => {
-    const row = new TextRenderable(renderer, {
-      content: "",
-      fg: COLORS.muted,
-    });
+    const row = new TextRenderable(renderer, singleLineTextOptions(COLORS.muted));
     breakdownPanel.add(row);
     return row;
   });
@@ -233,10 +223,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     title: PANEL_TITLES.log,
   });
   const eventRows = Array.from({ length: EVENT_ROW_COUNT }, () => {
-    const row = new TextRenderable(renderer, {
-      content: "",
-      fg: COLORS.muted,
-    });
+    const row = new TextRenderable(renderer, singleLineTextOptions(COLORS.muted));
     eventPanel.add(row);
     return row;
   });
@@ -248,10 +235,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     backgroundColor: COLORS.panel,
     padding: 1,
   });
-  const footerText = new TextRenderable(renderer, {
-    content: "",
-    fg: COLORS.muted,
-  });
+  const footerText = new TextRenderable(renderer, singleLineTextOptions(COLORS.muted));
   footerPanel.add(footerText);
 
   root.add(headerPanel);
