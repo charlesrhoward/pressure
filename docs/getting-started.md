@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide assumes you are running Pressure from source in an OSS checkout.
+This guide covers both the published Bun package and running Pressure from source.
 
 ## Requirements
 
@@ -12,7 +12,20 @@ Pressure uses OpenTUI for the terminal UI, and the current dependency surface is
 
 ## Install
 
-From the project root:
+Run without installing globally:
+
+```bash
+bunx @charlesrhoward/pressure
+```
+
+Or install the CLI globally:
+
+```bash
+bun add -g @charlesrhoward/pressure
+pressure
+```
+
+From a source checkout:
 
 ```bash
 bun install

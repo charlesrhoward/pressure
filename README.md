@@ -56,7 +56,20 @@ Requirements:
 - Bun
 - Zig
 
-Install dependencies:
+Run without installing globally:
+
+```bash
+bunx @charlesrhoward/pressure
+```
+
+Or install the CLI globally:
+
+```bash
+bun add -g @charlesrhoward/pressure
+pressure
+```
+
+From a source checkout:
 
 ```bash
 bun install

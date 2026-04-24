@@ -1,3 +1,5 @@
+#!/usr/bin/env bun
+
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { analyzeRisk } from "./analyzer/risk.ts";

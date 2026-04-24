@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "pressure",
+      "name": "@charlesrhoward/pressure",
       "dependencies": {
         "@opentui/core": "^0.1.102",
       },

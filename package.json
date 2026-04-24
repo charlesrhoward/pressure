@@ -1,10 +1,43 @@
 {
-  "name": "pressure",
+  "name": "@charlesrhoward/pressure",
   "version": "0.1.0",
+  "description": "Terminal-native memory investigation for macOS apps.",
   "license": "MIT",
-  "module": "src/index.ts",
   "type": "module",
-  "private": true,
+  "module": "src/index.ts",
+  "bin": {
+    "pressure": "src/index.ts"
+  },
+  "files": [
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
+  ],
+  "keywords": [
+    "macos",
+    "memory",
+    "diagnostics",
+    "cli",
+    "bun",
+    "opentui"
+  ],
+  "homepage": "https://github.com/charlesrhoward/pressure#readme",
+  "bugs": {
+    "url": "https://github.com/charlesrhoward/pressure/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/charlesrhoward/pressure.git"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "bun run src/index.ts --mock",
     "start": "bun run src/index.ts",
