@@ -5,7 +5,7 @@ import { resolveTargetGroup } from "../collector/processes.ts";
 import { buildReport } from "../report/markdown.ts";
 import { TimeSeriesStore } from "../store/timeseries.ts";
 import type { Collector, CollectorSelector, IdleTestResult, ProcessGroup, ReportContext, VmmapDiffRow } from "../types/domain.ts";
-import { pruneExpandedGroupIds } from "./treeState.ts";
+import { collapseTreeRowForBackNavigation, pruneExpandedGroupIds } from "./treeState.ts";
 import {
   clamp,
   formatBytes,
@@ -1022,15 +1022,8 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
       return;
     }
 
-    if (row.kind === "group") {
-      if (expandedGroupIds.has(row.groupId)) {
-        expandedGroupIds.delete(row.groupId);
-        clampHighlight();
-      }
-      return;
-    }
-
-    highlightedIndex = indexForGroupId(row.groupId, highlightedIndex);
+    const parentIndex = row.kind === "process" ? indexForGroupId(row.groupId, highlightedIndex) : highlightedIndex;
+    highlightedIndex = collapseTreeRowForBackNavigation(row, expandedGroupIds, highlightedIndex, parentIndex);
     clampHighlight();
   }
 
