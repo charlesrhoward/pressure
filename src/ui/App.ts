@@ -5,6 +5,7 @@ import { resolveTargetGroup } from "../collector/processes.ts";
 import { buildReport } from "../report/markdown.ts";
 import { TimeSeriesStore } from "../store/timeseries.ts";
 import type { Collector, CollectorSelector, IdleTestResult, ProcessGroup, ReportContext, VmmapDiffRow } from "../types/domain.ts";
+import { pruneExpandedGroupIds } from "./treeState.ts";
 import {
   clamp,
   formatBytes,
@@ -327,7 +328,6 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
         if (result.target) {
           currentTarget = result.target;
           selectedGroupId = result.target.id;
-          expandedGroupIds.add(result.target.id);
           selector.pid = result.target.pid;
           selector.groupId = result.target.id;
           const preferredPid =
@@ -780,7 +780,6 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
 
     selectedGroupId = group.id;
     currentTarget = group;
-    expandedGroupIds.add(group.id);
     options.initialSelection.pid = row.pid;
     addEvent(row.kind === "group" ? `selected ${group.displayName}` : `drilled into ${group.displayName} / ${row.label}`);
     idleTest = null;
@@ -916,16 +915,10 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
   }
 
   function syncTreeState(): void {
-    const validGroupIds = new Set(groups.map((group) => group.id));
-    for (const groupId of [...expandedGroupIds]) {
-      if (!validGroupIds.has(groupId)) {
-        expandedGroupIds.delete(groupId);
-      }
-    }
-
-    if (currentTarget && validGroupIds.has(currentTarget.id)) {
-      expandedGroupIds.add(currentTarget.id);
-    }
+    pruneExpandedGroupIds(
+      expandedGroupIds,
+      groups.map((group) => group.id),
+    );
   }
 
   function buildProcessTreeRows(): ProcessTreeRow[] {

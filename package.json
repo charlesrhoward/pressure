@@ -1,6 +1,6 @@
 {
   "name": "@charlesrhoward/pressure",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Terminal-native memory investigation for macOS apps.",
   "license": "MIT",
   "type": "module",
@@ -41,6 +41,7 @@
   "scripts": {
     "dev": "bun run src/index.ts --mock",
     "start": "bun run src/index.ts",
+    "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
