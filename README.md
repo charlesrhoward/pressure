@@ -1,6 +1,7 @@
 # Pressure
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-34d399.svg)](./LICENSE)
+[![CI](https://github.com/charlesrhoward/pressure/actions/workflows/ci.yml/badge.svg)](https://github.com/charlesrhoward/pressure/actions/workflows/ci.yml)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS-111827?logo=apple)
 ![Runtime: Bun](https://img.shields.io/badge/runtime-Bun-F9F1E1?logo=bun)
 ![UI: OpenTUI](https://img.shields.io/badge/ui-OpenTUI-06b6d4)

@@ -39,6 +39,22 @@ Typecheck:
 bun run typecheck
 ```
 
+Run tests:
+
+```bash
+bun test
+```
+
+Run the same core checks as CI:
+
+```bash
+bun ci
+bun test
+bun run typecheck
+bun run src/index.ts --help
+bun publish --dry-run
+```
+
 ## Contribution Areas
 
 High-value contributions:
@@ -87,7 +103,7 @@ then update the relevant docs in:
 
 ## Testing Notes
 
-This repo currently has limited formal test coverage. Until that changes:
+This repo has a small but growing test suite. Until coverage is broader:
 
 - keep verification narrow and task-specific
 - prefer concrete repro paths over broad noisy checks
