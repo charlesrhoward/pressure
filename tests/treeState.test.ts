@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { collapseTreeRowForBackNavigation, pruneExpandedGroupIds } from "../src/ui/treeState.ts";
+import { collapseTreeRowForBackNavigation, findStableTreeRowIndex, pruneExpandedGroupIds } from "../src/ui/treeState.ts";
 
 describe("process tree expansion state", () => {
   test("does not auto-expand a valid selected group during refresh", () => {
@@ -34,5 +34,24 @@ describe("process tree expansion state", () => {
 
     expect(nextIndex).toBe(3);
     expect([...expandedGroupIds]).toEqual([]);
+  });
+
+  test("refresh keeps focus on a different visible group while a selected target is sampled", () => {
+    const rows = [
+      { kind: "group" as const, groupId: "codex", pid: 100 },
+      { kind: "group" as const, groupId: "iterm", pid: 200 },
+    ];
+
+    expect(findStableTreeRowIndex(rows, { kind: "group", groupId: "iterm", pid: 200 })).toBe(1);
+  });
+
+  test("refresh keeps focus on a visible child process by group and pid", () => {
+    const rows = [
+      { kind: "group" as const, groupId: "codex", pid: 100 },
+      { kind: "group" as const, groupId: "iterm", pid: 200 },
+      { kind: "process" as const, groupId: "iterm", pid: 201 },
+    ];
+
+    expect(findStableTreeRowIndex(rows, { kind: "process", groupId: "iterm", pid: 201 })).toBe(2);
   });
 });
