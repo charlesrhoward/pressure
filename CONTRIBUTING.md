@@ -52,7 +52,7 @@ bun ci
 bun test
 bun run typecheck
 bun run src/index.ts --help
-bun publish --dry-run
+bun pm pack --dry-run
 ```
 
 ## Contribution Areas

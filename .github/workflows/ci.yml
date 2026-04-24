@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -50,4 +50,4 @@ jobs:
         run: bun run src/index.ts --help
 
       - name: Verify package contents
-        run: bun publish --dry-run
+        run: bun pm pack --dry-run
