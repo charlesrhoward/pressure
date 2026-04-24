@@ -14,7 +14,7 @@ import type {
   VmmapDiffRow,
   VmmapRegionSummary,
 } from "../types/domain.ts";
-import { collapseTreeRowForBackNavigation, pruneExpandedGroupIds } from "./treeState.ts";
+import { collapseTreeRowForBackNavigation, findStableTreeRowIndex, pruneExpandedGroupIds } from "./treeState.ts";
 import {
   clamp,
   formatBytes,
@@ -74,14 +74,35 @@ const PANEL_TITLES = {
 } as const;
 
 const IDLE_TEST_DURATION_MS = 20_000;
+const HEADER_PANEL_HEIGHT = 3;
+const FOOTER_PANEL_HEIGHT = 3;
 const PROCESS_PANEL_WIDTH = 60;
 const PROCESS_TEXT_WIDTH = 56;
-const PROCESS_ROW_COUNT = 24;
+// Border, vertical padding, and the search row consume panel rows before the process list starts.
+const PROCESS_PANEL_STATIC_ROWS = 5;
+const ROOT_VERTICAL_PADDING_ROWS = 2;
+const ROOT_VERTICAL_GAP_ROWS = 4;
+const MAX_PROCESS_ROW_COUNT = 200;
 const DIAGNOSIS_PANEL_WIDTH = 26;
 const BREAKDOWN_PANEL_HEIGHT = 10;
 const BREAKDOWN_ROW_COUNT = 7;
+const BREAKDOWN_LABEL_WIDTH = 32;
+const BREAKDOWN_RSS_WIDTH = 9;
+const BREAKDOWN_CPU_WIDTH = 5;
 const EVENT_PANEL_HEIGHT = 6;
 const EVENT_ROW_COUNT = 4;
+
+export function calculateProcessViewportRows(panelHeight: number): number {
+  if (!Number.isFinite(panelHeight) || panelHeight <= 0) {
+    return 1;
+  }
+
+  return Math.max(1, Math.floor(panelHeight) - PROCESS_PANEL_STATIC_ROWS);
+}
+
+export function formatBreakdownTableRow(label: string, rss: string, cpu: string, runtime: string): string {
+  return `${truncate(label, BREAKDOWN_LABEL_WIDTH).padEnd(BREAKDOWN_LABEL_WIDTH)} ${rss.padEnd(BREAKDOWN_RSS_WIDTH)} ${cpu.padEnd(BREAKDOWN_CPU_WIDTH)} ${runtime}`;
+}
 
 export async function runPressureApp(options: RunPressureAppOptions): Promise<void> {
   const opentui = await loadOpenTui();
@@ -113,6 +134,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
   let idleTest: IdleTestResult | null = null;
   let refreshInFlight = false;
   let isShuttingDown = false;
+  let processRowSyncScheduled = false;
 
   const root = new BoxRenderable(renderer, {
     flexDirection: "column",
@@ -124,7 +146,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
   });
 
   const headerPanel = new BoxRenderable(renderer, {
-    height: 3,
+    height: HEADER_PANEL_HEIGHT,
     borderStyle: "rounded",
     borderColor: COLORS.border,
     backgroundColor: COLORS.panel,
@@ -154,15 +176,14 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     backgroundColor: COLORS.panel,
     padding: 1,
     gap: 0,
+    overflow: "hidden",
     title: PANEL_TITLES.processes,
   });
   const searchRow = new TextRenderable(renderer, singleLineTextOptions(COLORS.muted));
   processPanel.add(searchRow);
-  const processRows = Array.from({ length: PROCESS_ROW_COUNT }, () => {
-    const row = new TextRenderable(renderer, singleLineTextOptions(COLORS.dim));
-    processPanel.add(row);
-    return row;
-  });
+  const processRows: any[] = [];
+  syncProcessRowRenderables(estimateInitialProcessRowCount());
+  processPanel.onSizeChange = scheduleProcessRowSync;
 
   const timelinePanel = new BoxRenderable(renderer, {
     flexGrow: 1,
@@ -171,6 +192,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     backgroundColor: COLORS.panel,
     padding: 1,
     gap: 0,
+    overflow: "hidden",
     title: PANEL_TITLES.timeline,
   });
   const timelineRows = Array.from({ length: 8 }, () => {
@@ -186,6 +208,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     backgroundColor: COLORS.panel,
     padding: 1,
     gap: 0,
+    overflow: "hidden",
     title: PANEL_TITLES.diagnosis,
   });
   const diagnosisRows = Array.from({ length: 10 }, () => {
@@ -205,6 +228,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     backgroundColor: COLORS.panel,
     padding: 1,
     gap: 0,
+    overflow: "hidden",
     title: PANEL_TITLES.breakdown,
   });
   const breakdownRows = Array.from({ length: BREAKDOWN_ROW_COUNT }, () => {
@@ -220,6 +244,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     backgroundColor: COLORS.panel,
     padding: 1,
     gap: 0,
+    overflow: "hidden",
     title: PANEL_TITLES.log,
   });
   const eventRows = Array.from({ length: EVENT_ROW_COUNT }, () => {
@@ -229,7 +254,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
   });
 
   const footerPanel = new BoxRenderable(renderer, {
-    height: 3,
+    height: FOOTER_PANEL_HEIGHT,
     borderStyle: "rounded",
     borderColor: COLORS.border,
     backgroundColor: COLORS.panel,
@@ -323,9 +348,11 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
           selectedGroupId = result.target.id;
           selector.pid = result.target.pid;
           selector.groupId = result.target.id;
-          const preferredPid =
-            previousFocusedRow && previousFocusedRow.groupId === result.target.id ? previousFocusedRow.pid : result.target.pid;
-          highlightedIndex = indexForPid(preferredPid, indexForGroupId(result.target.id, highlightedIndex));
+          const refreshedFocusedIndex = findStableTreeRowIndex(buildProcessTreeRows(), previousFocusedRow);
+          highlightedIndex =
+            refreshedFocusedIndex === -1
+              ? indexForPid(result.target.pid, indexForGroupId(result.target.id, highlightedIndex))
+              : refreshedFocusedIndex;
 
           if (result.sample) {
             store.addSample(result.sample);
@@ -351,6 +378,10 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
   }
 
   function render(): void {
+    if (syncProcessRowRenderables()) {
+      clampHighlight();
+    }
+
     const focusedRow = getHighlightedTreeRow();
     const activeGroup = currentTarget ?? (focusedRow ? findGroupById(focusedRow.groupId) : null);
     const focusedPid = activeGroup ? resolveFocusedPid(activeGroup, focusedRow) : undefined;
@@ -372,6 +403,68 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     updateEventPanel();
     updateFooter(activeGroup, focusedRow);
     renderer.requestRender();
+  }
+
+  function estimateInitialProcessRowCount(): number {
+    const rendererHeight = renderer.height || renderer.terminalHeight || process.stdout.rows || 40;
+    const fixedRows =
+      ROOT_VERTICAL_PADDING_ROWS +
+      ROOT_VERTICAL_GAP_ROWS +
+      HEADER_PANEL_HEIGHT +
+      BREAKDOWN_PANEL_HEIGHT +
+      EVENT_PANEL_HEIGHT +
+      FOOTER_PANEL_HEIGHT;
+    return calculateProcessViewportRows(rendererHeight - fixedRows);
+  }
+
+  function getProcessRowCapacity(): number {
+    const measuredHeight = processPanel.height;
+    if (!Number.isFinite(measuredHeight) || measuredHeight <= 0) {
+      return processRows.length || estimateInitialProcessRowCount();
+    }
+
+    return calculateProcessViewportRows(measuredHeight);
+  }
+
+  function syncProcessRowRenderables(rowCount = getProcessRowCapacity()): boolean {
+    const nextRowCount = clamp(Math.floor(rowCount), 1, MAX_PROCESS_ROW_COUNT);
+    if (nextRowCount === processRows.length) {
+      return false;
+    }
+
+    while (processRows.length < nextRowCount) {
+      const row = new TextRenderable(renderer, singleLineTextOptions(COLORS.dim));
+      processPanel.add(row);
+      processRows.push(row);
+    }
+
+    while (processRows.length > nextRowCount) {
+      const row = processRows.pop();
+      if (row) {
+        processPanel.remove(row.id);
+      }
+    }
+
+    return true;
+  }
+
+  function scheduleProcessRowSync(): void {
+    if (processRowSyncScheduled || isShuttingDown) {
+      return;
+    }
+
+    processRowSyncScheduled = true;
+    queueMicrotask(() => {
+      processRowSyncScheduled = false;
+      if (isShuttingDown) {
+        return;
+      }
+
+      if (syncProcessRowRenderables()) {
+        clampHighlight();
+        render();
+      }
+    });
   }
 
   function updateHeader(
@@ -611,21 +704,36 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
 
     const processRowsForGroup = buildGroupProcessRows(activeGroup);
     const rows: Array<{ content: string; fg: string }> = [
-      { content: "Process / Role                     RSS       CPU   Runtime", fg: COLORS.text },
+      { content: formatBreakdownTableRow("Process / Role", "RSS", "CPU", "Runtime"), fg: COLORS.text },
       ...processRowsForGroup.slice(0, BREAKDOWN_ROW_COUNT - 3).map((row) => {
         const isFocused = focusedRow?.pid === row.pid;
         const processLabel = `${row.isMainProcess ? "main" : "child"} ${truncate(row.label, 24)}`;
         return {
-          content: `${processLabel.padEnd(32)} ${formatBytes(row.rssBytes).padStart(9)} ${formatPercent(row.cpuPercent, 0).padStart(5)} ${formatDurationFromSeconds(row.runtimeSeconds)}`,
+          content: formatBreakdownTableRow(
+            processLabel,
+            formatBytes(row.rssBytes),
+            formatPercent(row.cpuPercent, 0),
+            formatDurationFromSeconds(row.runtimeSeconds),
+          ),
           fg: isFocused ? COLORS.cyan : row.isMainProcess ? COLORS.text : COLORS.muted,
         };
       }),
       {
-        content: `Group total                         ${formatBytes(activeGroup.totalRssBytes).padStart(9)} ${formatPercent(activeGroup.cpuPercent, 0).padStart(5)} ${formatDurationFromSeconds(activeGroup.runtimeSeconds)}`,
+        content: formatBreakdownTableRow(
+          "Group total",
+          formatBytes(activeGroup.totalRssBytes),
+          formatPercent(activeGroup.cpuPercent, 0),
+          formatDurationFromSeconds(activeGroup.runtimeSeconds),
+        ),
         fg: COLORS.amber,
       },
       {
-        content: `Private memory                      ${formatBytes(activeGroup.totalPrivateBytes).padStart(9)}  n/a   ${activeGroup.totalPrivateBytes === null ? "vmmap needed" : "sampled"}`,
+        content: formatBreakdownTableRow(
+          "Private memory",
+          formatBytes(activeGroup.totalPrivateBytes),
+          "n/a",
+          activeGroup.totalPrivateBytes === null ? "vmmap needed" : "sampled",
+        ),
         fg: COLORS.cyan,
       },
     ];
@@ -634,7 +742,12 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     if (topRegion && rows.length < BREAKDOWN_ROW_COUNT) {
       const topMetric = displayMetricForRegion(topRegion);
       rows.push({
-        content: `Latest snapshot top ${topMetric.name.padEnd(8)} ${formatBytes(topMetric.bytes).padStart(9)}  n/a   ${truncate(topRegion.name, 18)}`,
+        content: formatBreakdownTableRow(
+          `Latest snapshot top ${topMetric.name}`,
+          formatBytes(topMetric.bytes),
+          "n/a",
+          truncate(topRegion.name, 18),
+        ),
         fg: COLORS.dim,
       });
     }
