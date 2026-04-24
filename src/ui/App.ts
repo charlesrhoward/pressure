@@ -91,6 +91,7 @@ const BREAKDOWN_RSS_WIDTH = 9;
 const BREAKDOWN_CPU_WIDTH = 5;
 const EVENT_PANEL_HEIGHT = 6;
 const EVENT_ROW_COUNT = 4;
+const HELP_ROW_COUNT = 20;
 
 export function calculateProcessViewportRows(panelHeight: number): number {
   if (!Number.isFinite(panelHeight) || panelHeight <= 0) {
@@ -102,6 +103,31 @@ export function calculateProcessViewportRows(panelHeight: number): number {
 
 export function formatBreakdownTableRow(label: string, rss: string, cpu: string, runtime: string): string {
   return `${truncate(label, BREAKDOWN_LABEL_WIDTH).padEnd(BREAKDOWN_LABEL_WIDTH)} ${rss.padEnd(BREAKDOWN_RSS_WIDTH)} ${cpu.padEnd(BREAKDOWN_CPU_WIDTH)} ${runtime}`;
+}
+
+export function buildHelpDefinitions(): string[] {
+  return [
+    "Pressure Help   close: ? or Esc",
+    "",
+    "Panels",
+    "Process Explorer: grouped process tree; highlighted row is focus, filled dot is sampled target.",
+    "Memory Timeline: recent private/RSS/system pressure deltas plus the trend shape.",
+    "Diagnosis: risk model from sample history, idle-test outcome, and vmmap diff evidence.",
+    "Process Drilldown: per-process metrics; Event Log: collector, snapshot, export, and errors.",
+    "",
+    "Diagnosis Terms",
+    "Verdict: plain-language label from risk score and child-runaway evidence.",
+    "Risk: 0-100 score; normal 0-30, watch 31-60, suspicious 61-80, high 81-100.",
+    "Confidence: signal quality; sample count, reasons, vmmap diff, and idle-test evidence raise it.",
+    "Reasons: strongest signals that moved the score.",
+    "Next: suggested follow-up evidence to collect.",
+    "",
+    "Memory Terms",
+    "RSS / Resident: physical memory currently resident for the target process group.",
+    "Private memory: dirty/private vmmap regions; light live samples may show this as unavailable.",
+    "Compressed / Swap: host pressure context, not target-local proof.",
+    "Idle test: checks whether memory recovers after quiet time; non-recovery raises suspicion.",
+  ];
 }
 
 export async function runPressureApp(options: RunPressureAppOptions): Promise<void> {
@@ -263,12 +289,35 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
   const footerText = new TextRenderable(renderer, singleLineTextOptions(COLORS.muted));
   footerPanel.add(footerText);
 
+  const helpOverlay = new BoxRenderable(renderer, {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: "100%",
+    height: "100%",
+    zIndex: 20,
+    borderStyle: "rounded",
+    borderColor: COLORS.cyan,
+    backgroundColor: COLORS.bg,
+    padding: 1,
+    gap: 0,
+    overflow: "hidden",
+    title: "Help",
+    visible: false,
+  });
+  const helpRows = Array.from({ length: HELP_ROW_COUNT }, () => {
+    const row = new TextRenderable(renderer, singleLineTextOptions(COLORS.muted));
+    helpOverlay.add(row);
+    return row;
+  });
+
   root.add(headerPanel);
   root.add(bodyRow);
   root.add(breakdownPanel);
   root.add(eventPanel);
   root.add(footerPanel);
   renderer.root.add(root);
+  renderer.root.add(helpOverlay);
 
   addEvent(`collector ready (${options.collector.mode})`);
 
@@ -402,6 +451,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     updateBreakdown(activeGroup, focusedRow, diffRows, latestSnapshot);
     updateEventPanel();
     updateFooter(activeGroup, focusedRow);
+    updateHelpOverlay();
     renderer.requestRender();
   }
 
@@ -756,20 +806,31 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
   }
 
   function updateEventPanel(): void {
-    const lines = helpVisible
-      ? [
-          "q quit   / search   up/down move   enter select",
-          "left/right or space drill   s snapshot   d diff",
-          "e export report   ? close help",
-          "The live collector uses ps, vm_stat, sysctl, and vmmap when available.",
-          "Pressure is opinionated about suspicious growth, not proof of a confirmed leak.",
-          `Search mode: ${searchMode ? "active" : "idle"}`,
-        ]
-      : events.slice(-eventRows.length);
+    const lines = events.slice(-eventRows.length);
 
     for (let index = 0; index < eventRows.length; index += 1) {
       eventRows[index].content = lines[index] ?? "";
-      eventRows[index].fg = helpVisible ? COLORS.muted : COLORS.muted;
+      eventRows[index].fg = COLORS.muted;
+    }
+  }
+
+  function updateHelpOverlay(): void {
+    helpOverlay.visible = helpVisible;
+    if (!helpVisible) {
+      return;
+    }
+
+    const lines = buildHelpDefinitions();
+    for (let index = 0; index < helpRows.length; index += 1) {
+      const row = helpRows[index];
+      const line = lines[index] ?? "";
+      row.content = line;
+      row.fg =
+        line === "Panels" || line === "Diagnosis Terms" || line === "Memory Terms"
+          ? COLORS.cyan
+          : index === 0
+            ? COLORS.text
+            : COLORS.muted;
     }
   }
 
@@ -784,6 +845,14 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     if (searchMode) {
       handleSearchKey(key);
       render();
+      return;
+    }
+
+    if (helpVisible && key.name !== "q") {
+      if (key.name === "escape" || key.name === "?") {
+        helpVisible = false;
+        render();
+      }
       return;
     }
 
