@@ -42,12 +42,13 @@ export class TimeSeriesStore {
     return [...(this.vmmapSnapshots.get(groupId) ?? [])];
   }
 
-  getLatestVmmapSnapshot(groupId: string): VmmapSnapshot | null {
-    return this.vmmapSnapshots.get(groupId)?.at(-1) ?? null;
+  getLatestVmmapSnapshot(groupId: string, pid?: number): VmmapSnapshot | null {
+    const snapshots = this.filteredVmmapSnapshots(groupId, pid);
+    return snapshots.at(-1) ?? null;
   }
 
-  getLatestVmmapDiff(groupId: string) {
-    const snapshots = this.vmmapSnapshots.get(groupId) ?? [];
+  getLatestVmmapDiff(groupId: string, pid?: number) {
+    const snapshots = this.filteredVmmapSnapshots(groupId, pid);
     const before = snapshots.at(-2);
     const after = snapshots.at(-1);
     if (!before || !after) {
@@ -55,5 +56,15 @@ export class TimeSeriesStore {
     }
 
     return diffVmmapSnapshots(before, after);
+  }
+
+  private filteredVmmapSnapshots(groupId: string, pid?: number): VmmapSnapshot[] {
+    const snapshots = this.vmmapSnapshots.get(groupId) ?? [];
+    const targetPid = pid ?? snapshots.at(-1)?.pid;
+    if (targetPid === undefined) {
+      return [];
+    }
+
+    return snapshots.filter((snapshot) => snapshot.pid === targetPid);
   }
 }

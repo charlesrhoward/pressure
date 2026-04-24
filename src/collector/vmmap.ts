@@ -59,19 +59,19 @@ export function parseVmmapRegions(raw: string): VmmapRegionSummary[] {
     const current: VmmapRegionSummary = regions.get(name) ?? {
       name,
       virtualBytes: 0,
-      residentBytes: 0,
-      dirtyBytes: 0,
-      swapBytes: 0,
+      residentBytes: null,
+      dirtyBytes: null,
+      swapBytes: null,
     };
 
     current.virtualBytes += virtualBytes;
-    current.residentBytes = (current.residentBytes ?? 0) + (residentBytes ?? 0);
-    current.dirtyBytes = (current.dirtyBytes ?? 0) + (dirtyBytes ?? 0);
-    current.swapBytes = (current.swapBytes ?? 0) + (swapBytes ?? 0);
+    current.residentBytes = addOptionalBytes(current.residentBytes, residentBytes);
+    current.dirtyBytes = addOptionalBytes(current.dirtyBytes, dirtyBytes);
+    current.swapBytes = addOptionalBytes(current.swapBytes, swapBytes);
     regions.set(name, current);
   }
 
-  return [...regions.values()].sort((left, right) => right.virtualBytes - left.virtualBytes);
+  return [...regions.values()].sort((left, right) => rankRegionBytes(right) - rankRegionBytes(left));
 }
 
 export function diffVmmapSnapshots(before: VmmapSnapshot, after: VmmapSnapshot): VmmapDiffRow[] {
@@ -83,12 +83,14 @@ export function diffVmmapSnapshots(before: VmmapSnapshot, after: VmmapSnapshot):
     .map((name) => {
       const previous = beforeMap.get(name);
       const next = afterMap.get(name);
-      const beforeBytes = previous?.virtualBytes ?? 0;
-      const afterBytes = next?.virtualBytes ?? 0;
+      const metric = chooseDiffMetric(previous, next);
+      const beforeBytes = bytesForMetric(previous, metric);
+      const afterBytes = bytesForMetric(next, metric);
       const deltaBytes = afterBytes - beforeBytes;
 
       return {
         name,
+        metric,
         beforeBytes,
         afterBytes,
         deltaBytes,
@@ -97,6 +99,60 @@ export function diffVmmapSnapshots(before: VmmapSnapshot, after: VmmapSnapshot):
     })
     .filter((row) => row.beforeBytes !== 0 || row.afterBytes !== 0)
     .sort((left, right) => Math.abs(right.deltaBytes) - Math.abs(left.deltaBytes));
+}
+
+function addOptionalBytes(current: number | null, next: number | null): number | null {
+  if (next === null) {
+    return current;
+  }
+
+  return (current ?? 0) + next;
+}
+
+function rankRegionBytes(region: VmmapRegionSummary): number {
+  return region.dirtyBytes ?? region.residentBytes ?? region.virtualBytes;
+}
+
+function chooseDiffMetric(
+  previous: VmmapRegionSummary | undefined,
+  next: VmmapRegionSummary | undefined,
+): VmmapDiffRow["metric"] {
+  const beforeDirtyBytes = previous?.dirtyBytes ?? 0;
+  const afterDirtyBytes = next?.dirtyBytes ?? 0;
+  const hasDirtyBytes = previous?.dirtyBytes !== null && previous?.dirtyBytes !== undefined;
+  const nextHasDirtyBytes = next?.dirtyBytes !== null && next?.dirtyBytes !== undefined;
+  if (hasDirtyBytes || nextHasDirtyBytes) {
+    if (beforeDirtyBytes !== 0 || afterDirtyBytes !== 0) {
+      return "dirty";
+    }
+  }
+
+  const beforeResidentBytes = previous?.residentBytes ?? 0;
+  const afterResidentBytes = next?.residentBytes ?? 0;
+  const hasResidentBytes = previous?.residentBytes !== null && previous?.residentBytes !== undefined;
+  const nextHasResidentBytes = next?.residentBytes !== null && next?.residentBytes !== undefined;
+  if (hasResidentBytes || nextHasResidentBytes) {
+    if (beforeResidentBytes !== 0 || afterResidentBytes !== 0) {
+      return "resident";
+    }
+  }
+
+  return "virtual";
+}
+
+function bytesForMetric(region: VmmapRegionSummary | undefined, metric: VmmapDiffRow["metric"]): number {
+  if (!region) {
+    return 0;
+  }
+
+  switch (metric) {
+    case "dirty":
+      return region.dirtyBytes ?? 0;
+    case "resident":
+      return region.residentBytes ?? 0;
+    case "virtual":
+      return region.virtualBytes;
+  }
 }
 
 function trendFromDelta(deltaBytes: number): VmmapDiffRow["trend"] {

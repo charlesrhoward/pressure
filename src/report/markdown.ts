@@ -1,4 +1,4 @@
-import type { ReportContext, ReportFormat, VmmapDiffRow } from "../types/domain.ts";
+import type { ReportContext, ReportFormat, VmmapDiffRow, VmmapRegionSummary } from "../types/domain.ts";
 import {
   formatBytes,
   formatDeltaBytes,
@@ -23,10 +23,15 @@ export function buildReport(context: ReportContext, format: ReportFormat): strin
 
 export function buildMarkdownReport(context: ReportContext): string {
   const latest = context.series.at(-1);
-  const privateValues = context.series.map((sample) => sample.privateBytes ?? sample.residentBytes);
+  const hasPrivateTimeline = context.series.length > 0 && context.series.every((sample) => sample.privateBytes !== null);
+  const privateValues = hasPrivateTimeline ? context.series.map((sample) => sample.privateBytes ?? 0) : [];
   const residentValues = context.series.map((sample) => sample.residentBytes);
   const compressedValues = context.series.map((sample) => sample.compressedBytes ?? 0);
   const swapValues = context.series.map((sample) => sample.swapUsedBytes ?? 0);
+  const timelineDeltaLabel = formatTimelineDeltaLabel(context.series, 15 * 60_000);
+  const privateTimelineLine = hasPrivateTimeline
+    ? `- Private Memory: ${sparkline(privateValues, 32)}  current ${formatBytes(privateValues.at(-1))}  ${timelineDeltaLabel} ${formatDeltaBytes(context.assessment.metrics.privateDelta15m)}`
+    : "- Private Memory: unavailable in live samples; use vmmap snapshot diffs for dirty/private region confirmation.";
 
   const lines = [
     `# Pressure Report - ${context.target.displayName} - ${context.assessment.verdict}`,
@@ -36,6 +41,7 @@ export function buildMarkdownReport(context: ReportContext): string {
     `Sampling interval: ${context.sampleMs} ms`,
     `Samples captured: ${context.series.length}`,
     `Target PID: ${context.target.pid}`,
+    ...(context.latestSnapshot ? [`Snapshot PID: ${context.latestSnapshot.pid}`] : []),
     `Runtime: ${formatDurationFromSeconds(latest?.runtimeSeconds ?? context.target.rootProcess.runtimeSeconds)}`,
     "",
     "## Summary",
@@ -44,7 +50,7 @@ export function buildMarkdownReport(context: ReportContext): string {
     `- Verdict: ${context.assessment.verdict}`,
     `- Confidence: ${context.assessment.confidence}%`,
     `- Current resident memory: ${formatBytes(latest?.residentBytes ?? context.target.totalRssBytes)}`,
-    `- Current private memory estimate: ${formatBytes(latest?.privateBytes ?? context.target.totalPrivateBytes)}`,
+    `- Current private memory: ${formatBytes(latest?.privateBytes ?? context.target.totalPrivateBytes)}`,
     "",
     "## Key Signals",
     "",
@@ -52,10 +58,10 @@ export function buildMarkdownReport(context: ReportContext): string {
     "",
     "## Timeline",
     "",
-    `- Private Memory: ${sparkline(privateValues, 32)}  current ${formatBytes(privateValues.at(-1))}  delta15m ${formatDeltaBytes(context.assessment.metrics.privateDelta15m)}`,
-    `- Resident Memory: ${sparkline(residentValues, 32)}  current ${formatBytes(residentValues.at(-1))}  delta15m ${formatDeltaBytes(context.assessment.metrics.residentDelta15m)}`,
-    `- Compressed Memory: ${sparkline(compressedValues, 32)}  current ${formatBytes(compressedValues.at(-1))}  delta15m ${formatDeltaBytes(context.assessment.metrics.compressedDelta15m)}`,
-    `- Swap Used: ${sparkline(swapValues, 32)}  current ${formatBytes(swapValues.at(-1))}  delta15m ${formatDeltaBytes(context.assessment.metrics.swapDelta15m)}`,
+    privateTimelineLine,
+    `- Resident Memory: ${sparkline(residentValues, 32)}  current ${formatBytes(residentValues.at(-1))}  ${timelineDeltaLabel} ${formatDeltaBytes(context.assessment.metrics.residentDelta15m)}`,
+    `- System Compressed Memory: ${sparkline(compressedValues, 32)}  current ${formatBytes(compressedValues.at(-1))}  ${timelineDeltaLabel} ${formatDeltaBytes(context.assessment.metrics.compressedDelta15m)}`,
+    `- System Swap Used: ${sparkline(swapValues, 32)}  current ${formatBytes(swapValues.at(-1))}  ${timelineDeltaLabel} ${formatDeltaBytes(context.assessment.metrics.swapDelta15m)}`,
     "",
     "## Child Processes",
     "",
@@ -72,7 +78,7 @@ export function buildMarkdownReport(context: ReportContext): string {
     "",
     "## Memory Breakdown",
     "",
-    ...renderVmmapSection(context.vmmapDiff ?? [], context.latestSnapshot?.regions ?? []),
+    ...renderVmmapSection(context.vmmapDiff ?? [], context.latestSnapshot),
   ];
 
   return lines.join("\n");
@@ -106,34 +112,79 @@ export function buildDiffMarkdown(rows: VmmapDiffRow[], beforePath: string, afte
     `Before: ${beforePath}`,
     `After: ${afterPath}`,
     "",
-    "| Region | Before | After | Delta | Trend |",
-    "| --- | ---: | ---: | ---: | --- |",
+    "| Region | Metric | Before | After | Delta | Trend |",
+    "| --- | --- | ---: | ---: | ---: | --- |",
     ...rows.slice(0, 20).map((row) => {
-      return `| ${row.name} | ${formatBytes(row.beforeBytes)} | ${formatBytes(row.afterBytes)} | ${formatDeltaBytes(row.deltaBytes)} | ${row.trend} |`;
+      return `| ${row.name} | ${row.metric} | ${formatBytes(row.beforeBytes)} | ${formatBytes(row.afterBytes)} | ${formatDeltaBytes(row.deltaBytes)} | ${row.trend} |`;
     }),
   ].join("\n");
 }
 
-function renderVmmapSection(diffRows: VmmapDiffRow[], regions: { name: string; virtualBytes: number }[]): string[] {
+function renderVmmapSection(diffRows: VmmapDiffRow[], snapshot: ReportContext["latestSnapshot"]): string[] {
   if (diffRows.length > 0) {
     return [
-      "| Region / Source | Before | After | Delta | Trend |",
-      "| --- | ---: | ---: | ---: | --- |",
+      "| Region / Source | Metric | Before | After | Delta | Trend |",
+      "| --- | --- | ---: | ---: | ---: | --- |",
       ...diffRows.slice(0, 10).map((row) => {
-        return `| ${row.name} | ${formatBytes(row.beforeBytes)} | ${formatBytes(row.afterBytes)} | ${formatDeltaBytes(row.deltaBytes)} | ${row.trend} |`;
+        return `| ${row.name} | ${row.metric} | ${formatBytes(row.beforeBytes)} | ${formatBytes(row.afterBytes)} | ${formatDeltaBytes(row.deltaBytes)} | ${row.trend} |`;
       }),
     ];
   }
 
+  const regions = snapshot?.regions ?? [];
   if (regions.length > 0) {
+    const capturedAt = snapshot?.capturedAt ?? Date.now();
     return [
-      "| Region / Source | Current | Captured At |",
-      "| --- | ---: | --- |",
+      "| Region / Source | Metric | Current | Captured At |",
+      "| --- | --- | ---: | --- |",
       ...regions.slice(0, 10).map((region) => {
-        return `| ${region.name} | ${formatBytes(region.virtualBytes)} | ${formatTimestamp(Date.now())} |`;
+        const metric = displayMetricForRegion(region);
+        return `| ${region.name} | ${metric.name} | ${formatBytes(metric.bytes)} | ${formatTimestamp(capturedAt)} |`;
       }),
     ];
   }
 
   return ["No vmmap snapshot was captured in this report window."];
+}
+
+function displayMetricForRegion(region: VmmapRegionSummary): { name: VmmapDiffRow["metric"]; bytes: number } {
+  if (region.dirtyBytes !== null && region.dirtyBytes !== 0) {
+    return { name: "dirty", bytes: region.dirtyBytes };
+  }
+
+  if (region.residentBytes !== null && region.residentBytes !== 0) {
+    return { name: "resident", bytes: region.residentBytes };
+  }
+
+  return { name: "virtual", bytes: region.virtualBytes };
+}
+
+function formatTimelineDeltaLabel(series: ReportContext["series"], requestedWindowMs: number): string {
+  const first = series[0];
+  const latest = series.at(-1);
+  if (!first || !latest) {
+    return "delta";
+  }
+
+  const actualWindowMs = latest.capturedAt - first.capturedAt;
+  if (actualWindowMs >= requestedWindowMs * 0.9) {
+    return "delta15m";
+  }
+
+  return `delta${formatShortDuration(actualWindowMs)}`;
+}
+
+function formatShortDuration(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  return `${hours}h`;
 }

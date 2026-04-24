@@ -42,9 +42,10 @@ Available workflows:
 
 ## Status
 
-This is an early OSS prototype. The UI and command surface are real, but some metrics are still heuristic:
+This is an early OSS prototype. The UI and command surface are real, but lightweight sampling is intentionally conservative:
 
-- Private memory is currently estimated in the lightweight collector path
+- Lightweight live samples track RSS, CPU, child process shape, and system pressure
+- Exact dirty/private region evidence comes from manual `vmmap` snapshots and diffs
 - `vmmap` is manual, not continuous
 - Permissions and macOS process visibility can affect what can be inspected
 - The collector is macOS-specific today
@@ -214,7 +215,7 @@ Architecture notes:
 
 - macOS only for the live collector path
 - `vmmap` can fail for processes the current user cannot inspect
-- The lightweight collector uses heuristics where macOS does not expose a cheap exact metric
+- The lightweight collector avoids fabricating private memory values when macOS does not expose a cheap exact counter
 - Pressure is diagnostic tooling, not proof of a confirmed leak
 
 ## Contributing

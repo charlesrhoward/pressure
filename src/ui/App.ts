@@ -4,7 +4,16 @@ import { analyzeRisk } from "../analyzer/risk.ts";
 import { resolveTargetGroup } from "../collector/processes.ts";
 import { buildReport } from "../report/markdown.ts";
 import { TimeSeriesStore } from "../store/timeseries.ts";
-import type { Collector, CollectorSelector, IdleTestResult, ProcessGroup, ReportContext, VmmapDiffRow } from "../types/domain.ts";
+import type {
+  Collector,
+  CollectorSelector,
+  IdleTestResult,
+  MemorySample,
+  ProcessGroup,
+  ReportContext,
+  VmmapDiffRow,
+  VmmapRegionSummary,
+} from "../types/domain.ts";
 import { collapseTreeRowForBackNavigation, pruneExpandedGroupIds } from "./treeState.ts";
 import {
   clamp,
@@ -360,8 +369,9 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
   function render(): void {
     const focusedRow = getHighlightedTreeRow();
     const activeGroup = currentTarget ?? (focusedRow ? findGroupById(focusedRow.groupId) : null);
-    const diffRows = activeGroup ? store.getLatestVmmapDiff(activeGroup.id) : [];
-    const latestSnapshot = activeGroup ? store.getLatestVmmapSnapshot(activeGroup.id) : null;
+    const focusedPid = activeGroup ? resolveFocusedPid(activeGroup, focusedRow) : undefined;
+    const diffRows = activeGroup ? store.getLatestVmmapDiff(activeGroup.id, focusedPid) : [];
+    const latestSnapshot = activeGroup ? store.getLatestVmmapSnapshot(activeGroup.id, focusedPid) : null;
     const assessment =
       activeGroup && store.getSeries(activeGroup.id).length > 0
         ? analyzeRisk(store.getSeries(activeGroup.id), {
@@ -477,16 +487,19 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     const series = store.getSeries(activeGroup.id);
     const latest = series.at(-1);
     const residentValues = series.map((sample) => sample.residentBytes);
-    const privateValues = series.map((sample) => sample.privateBytes ?? sample.residentBytes);
+    const hasPrivateTimeline = series.length > 0 && series.every((sample) => sample.privateBytes !== null);
+    const privateValues = hasPrivateTimeline ? series.map((sample) => sample.privateBytes ?? 0) : [];
     const compressedValues = series.map((sample) => sample.compressedBytes ?? 0);
     const swapValues = series.map((sample) => sample.swapUsedBytes ?? 0);
 
-    timelineRows[0].content = chartLine(
-      "Private Memory",
-      latest?.privateBytes ?? activeGroup.totalPrivateBytes,
-      assessment?.metrics.privateDelta15m ?? 0,
-      privateValues,
-    );
+    timelineRows[0].content = hasPrivateTimeline
+      ? chartLine(
+          "Private Memory",
+          latest?.privateBytes ?? activeGroup.totalPrivateBytes,
+          assessment?.metrics.privateDelta15m ?? 0,
+          privateValues,
+        )
+      : "Private Memory    unavailable   vmmap snapshot required for dirty/private regions";
     timelineRows[1].content = chartLine(
       "Resident Memory",
       latest?.residentBytes ?? activeGroup.totalRssBytes,
@@ -494,13 +507,13 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
       residentValues,
     );
     timelineRows[2].content = chartLine(
-      "Compressed",
+      "Sys Compressed",
       latest?.compressedBytes ?? latest?.system.compressedBytes ?? 0,
       assessment?.metrics.compressedDelta15m ?? 0,
       compressedValues,
     );
     timelineRows[3].content = chartLine(
-      "Swap Impact",
+      "System Swap",
       latest?.swapUsedBytes ?? latest?.system.swapUsedBytes ?? 0,
       assessment?.metrics.swapDelta15m ?? 0,
       swapValues,
@@ -527,7 +540,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
       return "Idle test: press i to check whether memory recovers after a quiet period.";
     }
     if (idleTest.active) {
-      return `Idle test running: baseline ${formatBytes(idleTest.baselinePrivateBytes)} current ${formatBytes(idleTest.latestPrivateBytes)}`;
+      return `Idle test running (${idleTest.memoryKind}): baseline ${formatBytes(idleTest.baselineBytes)} current ${formatBytes(idleTest.latestBytes)}`;
     }
     return `Idle test: ${idleTest.outcome.replaceAll("_", " ")} (${formatPercent((idleTest.recoveryRatio ?? 0) * 100)})`;
   }
@@ -568,7 +581,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     activeGroup: ProcessGroup | null,
     focusedRow: ProcessTreeRow | null,
     diffRows: VmmapDiffRow[],
-    latestSnapshot: { regions: Array<{ name: string; virtualBytes: number }> } | null,
+    latestSnapshot: { regions: VmmapRegionSummary[] } | null,
   ): void {
     const title =
       diffMode && diffRows.length > 0
@@ -592,11 +605,11 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
 
   function buildDiffRows(rows: VmmapDiffRow[]): Array<{ content: string; fg: string }> {
     const output: Array<{ content: string; fg: string }> = [
-      { content: "Region / Source               Before      After       Delta       Trend", fg: COLORS.text },
+      { content: "Region / Source               Metric    Before      After       Delta", fg: COLORS.text },
     ];
     for (const row of rows.slice(0, 6)) {
       output.push({
-        content: `${truncate(row.name, 24).padEnd(26)} ${formatBytes(row.beforeBytes).padStart(9)} ${formatBytes(row.afterBytes).padStart(9)} ${formatDeltaBytes(row.deltaBytes).padStart(10)} ${row.trend}`,
+        content: `${truncate(row.name, 24).padEnd(26)} ${row.metric.padEnd(8)} ${formatBytes(row.beforeBytes).padStart(9)} ${formatBytes(row.afterBytes).padStart(9)} ${formatDeltaBytes(row.deltaBytes).padStart(10)}`,
         fg: row.deltaBytes > 0 ? COLORS.amber : row.deltaBytes < 0 ? COLORS.green : COLORS.muted,
       });
     }
@@ -605,7 +618,7 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
 
   function buildBreakdownRows(
     activeGroup: ProcessGroup | null,
-    latestSnapshot: { regions: Array<{ name: string; virtualBytes: number }> } | null,
+    latestSnapshot: { regions: VmmapRegionSummary[] } | null,
     focusedRow: ProcessTreeRow | null,
   ): Array<{ content: string; fg: string }> {
     if (!activeGroup) {
@@ -628,15 +641,16 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
         fg: COLORS.amber,
       },
       {
-        content: `Private estimate                    ${formatBytes(activeGroup.totalPrivateBytes ?? 0).padStart(9)}  n/a   heuristic`,
+        content: `Private memory                      ${formatBytes(activeGroup.totalPrivateBytes).padStart(9)}  n/a   ${activeGroup.totalPrivateBytes === null ? "vmmap needed" : "sampled"}`,
         fg: COLORS.cyan,
       },
     ];
 
     const topRegion = latestSnapshot?.regions[0];
     if (topRegion && rows.length < BREAKDOWN_ROW_COUNT) {
+      const topMetric = displayMetricForRegion(topRegion);
       rows.push({
-        content: `Latest snapshot top region         ${formatBytes(topRegion.virtualBytes).padStart(9)}  n/a   ${truncate(topRegion.name, 18)}`,
+        content: `Latest snapshot top ${topMetric.name.padEnd(8)} ${formatBytes(topMetric.bytes).padStart(9)}  n/a   ${truncate(topRegion.name, 18)}`,
         fg: COLORS.dim,
       });
     }
@@ -796,9 +810,10 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     }
 
     try {
-      const snapshot = await options.collector.captureVmmap({ groupId: group.id, pid: group.pid });
+      const focusedPid = resolveFocusedPid(group, focusedRow);
+      const snapshot = await options.collector.captureVmmap({ groupId: group.id, pid: focusedPid });
       store.addVmmapSnapshot(group.id, snapshot);
-      addEvent(`snapshot captured for ${group.displayName}`);
+      addEvent(`snapshot captured for ${snapshot.targetName}`);
     } catch (error) {
       addEvent(error instanceof Error ? `snapshot failed: ${error.message}` : "snapshot failed");
     }
@@ -821,11 +836,14 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     }
 
     const latest = store.getLatest(group.id);
+    const baselinePrivateBytes = latest?.privateBytes ?? group.totalPrivateBytes;
+    const usesPrivateMemory = baselinePrivateBytes !== null;
     idleTest = {
       active: true,
       startedAt: Date.now(),
-      baselinePrivateBytes: latest?.privateBytes ?? group.totalPrivateBytes,
-      latestPrivateBytes: latest?.privateBytes ?? group.totalPrivateBytes,
+      memoryKind: usesPrivateMemory ? "private" : "resident",
+      baselineBytes: usesPrivateMemory ? baselinePrivateBytes : (latest?.residentBytes ?? group.totalRssBytes),
+      latestBytes: usesPrivateMemory ? baselinePrivateBytes : (latest?.residentBytes ?? group.totalRssBytes),
       recoveredBytes: 0,
       recoveryRatio: 0,
       outcome: "pending",
@@ -833,14 +851,15 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     addEvent("idle test started");
   }
 
-  function updateIdleTest(sample: { privateBytes: number | null }): void {
+  function updateIdleTest(sample: MemorySample): void {
     if (!idleTest || !idleTest.active) {
       return;
     }
 
-    idleTest.latestPrivateBytes = sample.privateBytes;
-    const baseline = idleTest.baselinePrivateBytes ?? 0;
-    const latest = sample.privateBytes ?? baseline;
+    const latestMemoryBytes = idleTest.memoryKind === "private" ? sample.privateBytes : sample.residentBytes;
+    idleTest.latestBytes = latestMemoryBytes;
+    const baseline = idleTest.baselineBytes ?? 0;
+    const latest = latestMemoryBytes ?? baseline;
     idleTest.recoveredBytes = Math.max(0, baseline - latest);
     idleTest.recoveryRatio = baseline > 0 ? idleTest.recoveredBytes / baseline : null;
 
@@ -879,9 +898,11 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     }
 
     const series = store.getSeries(group.id);
+    const focusedRow = getHighlightedTreeRow();
+    const focusedPid = resolveFocusedPid(group, focusedRow);
     const assessment = analyzeRisk(series, {
       idleTest,
-      vmmapDiff: store.getLatestVmmapDiff(group.id),
+      vmmapDiff: store.getLatestVmmapDiff(group.id, focusedPid),
     });
     const context: ReportContext = {
       target: currentTarget ?? group,
@@ -889,8 +910,8 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
       assessment,
       sampleMs: options.sampleMs,
       collectorMode: options.collector.mode,
-      vmmapDiff: store.getLatestVmmapDiff(group.id),
-      latestSnapshot: store.getLatestVmmapSnapshot(group.id) ?? undefined,
+      vmmapDiff: store.getLatestVmmapDiff(group.id, focusedPid),
+      latestSnapshot: store.getLatestVmmapSnapshot(group.id, focusedPid) ?? undefined,
       generatedAt: Date.now(),
     };
 
@@ -985,6 +1006,10 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     return buildProcessTreeRows()[highlightedIndex] ?? null;
   }
 
+  function resolveFocusedPid(group: ProcessGroup, focusedRow: ProcessTreeRow | null): number {
+    return focusedRow?.groupId === group.id ? focusedRow.pid : group.pid;
+  }
+
   function toggleHighlightedExpansion(): void {
     const row = getHighlightedTreeRow();
     if (!row || row.kind !== "group") {
@@ -1051,6 +1076,18 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
 
   function chartLine(label: string, current: number | null | undefined, delta: number, values: number[]): string {
     return `${label.padEnd(17)} ${formatBytes(current).padStart(9)} ${formatTrend(delta)} ${formatDeltaBytes(delta).padStart(10)} ${sparkline(values, 20)}`;
+  }
+
+  function displayMetricForRegion(region: VmmapRegionSummary): { name: VmmapDiffRow["metric"]; bytes: number } {
+    if (region.dirtyBytes !== null && region.dirtyBytes !== 0) {
+      return { name: "dirty", bytes: region.dirtyBytes };
+    }
+
+    if (region.residentBytes !== null && region.residentBytes !== 0) {
+      return { name: "resident", bytes: region.residentBytes };
+    }
+
+    return { name: "virtual", bytes: region.virtualBytes };
   }
 
   function colorForRisk(level: string): string {

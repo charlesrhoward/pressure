@@ -74,6 +74,14 @@ export function resolveTargetGroup(groups: ProcessGroup[], selector: CollectorSe
   return null;
 }
 
+export function resolveTargetProcess(group: ProcessGroup, pid?: number): ProcessEntry | null {
+  if (pid === undefined || pid === group.rootProcess.pid) {
+    return group.rootProcess;
+  }
+
+  return group.children.find((child) => child.pid === pid) ?? null;
+}
+
 function buildProcessGroup(groupKey: string, processes: RawProcess[]): ProcessGroup {
   const pidSet = new Set(processes.map((process) => process.pid));
   const root =
@@ -91,7 +99,10 @@ function buildProcessGroup(groupKey: string, processes: RawProcess[]): ProcessGr
     .map(toProcessEntry);
 
   const totalRssBytes = processes.reduce((sum, process) => sum + process.rssBytes, 0);
-  const totalPrivateBytes = processes.reduce((sum, process) => sum + (process.privateBytes ?? 0), 0);
+  const privateByteValues = processes.map((process) => process.privateBytes);
+  const totalPrivateBytes = privateByteValues.every((value) => value !== null)
+    ? privateByteValues.reduce((sum, value) => sum + (value ?? 0), 0)
+    : null;
 
   return {
     id: buildGroupId(root, groupKey),
@@ -158,7 +169,7 @@ function parsePsLine(line: string): RawProcess | null {
     ppid,
     cpuPercent,
     rssBytes: rssKilobytes * 1024,
-    privateBytes: estimatePrivateBytes(rssKilobytes * 1024),
+    privateBytes: null,
     runtimeSeconds,
     command,
     name,
@@ -235,10 +246,6 @@ function buildOwnerKey(owner: RawProcess): string {
 
 function buildGroupId(root: RawProcess, groupKey: string): string {
   return slugify(root.bundlePath ?? `${groupKey}-${root.groupName || root.name || root.pid}`);
-}
-
-function estimatePrivateBytes(rssBytes: number): number {
-  return Math.round(rssBytes * 0.74);
 }
 
 function normalize(value: string): string {

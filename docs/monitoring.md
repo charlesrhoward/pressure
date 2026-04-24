@@ -80,8 +80,8 @@ Each row includes:
 - timestamp
 - target group identity
 - focused process identity
-- focused process RSS, private estimate, CPU, runtime
-- group total RSS and private estimate
+- focused process RSS, private memory when available, CPU, runtime
+- group total RSS and private memory when available
 - system pressure score and level
 - system compressed memory and swap
 - child count and total child RSS
@@ -90,6 +90,6 @@ Each row includes:
 
 ## Limitations
 
-- Lightweight private-memory values are still heuristic
+- Lightweight live samples do not fabricate exact private-memory values; use `vmmap` snapshots and diffs for dirty/private region evidence
 - `vmmap` is manual and separate from CSV tracing
 - A growing RSS line is evidence of suspicious growth, not proof of a confirmed leak

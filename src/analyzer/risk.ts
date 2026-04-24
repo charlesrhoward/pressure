@@ -34,30 +34,34 @@ export function analyzeRisk(series: MemorySample[], options: RiskOptions = {}): 
   const residentDelta5m = deltaForWindow(series, 5 * 60_000, (sample) => sample.residentBytes);
   const residentDelta15m = deltaForWindow(series, 15 * 60_000, (sample) => sample.residentBytes);
   const residentDelta1h = deltaForWindow(series, 60 * 60_000, (sample) => sample.residentBytes);
-  const privateDelta15m = deltaForWindow(series, 15 * 60_000, (sample) => bytesOrZero(sample.privateBytes));
+  const privateDelta15mValue = deltaForNullableWindow(series, 15 * 60_000, (sample) => sample.privateBytes);
+  const privateDelta15m = privateDelta15mValue ?? 0;
   const compressedDelta15m = deltaForWindow(series, 15 * 60_000, (sample) => bytesOrZero(sample.compressedBytes));
   const swapDelta15m = deltaForWindow(series, 15 * 60_000, (sample) => bytesOrZero(sample.swapUsedBytes));
   const steadyGrowth = monotonicGrowth(series, 15 * 60_000, (sample) => sample.residentBytes);
   const childRunaway = detectChildRunaway(series, 15 * 60_000);
+  const primaryWindowLabel = describeSeriesWindow(series, 15 * 60_000);
   const repeatedRegions = (options.vmmapDiff ?? [])
     .filter((row) => row.deltaBytes >= 64 * 1024 ** 2)
     .slice(0, 3)
-    .map((row) => row.name);
+    .map((row) => `${row.name} ${row.metric}`);
 
   const reasons: string[] = [];
   const suggestedActions = new Set<string>();
   let score = 0;
 
-  if (privateDelta15m >= 512 * 1024 ** 2) {
+  if (privateDelta15mValue !== null && privateDelta15m >= 512 * 1024 ** 2) {
     score += 26;
-    reasons.push("Private memory is rising quickly over the last 15 minutes.");
+    reasons.push(`Private memory is rising quickly ${primaryWindowLabel}.`);
     suggestedActions.add("Capture a vmmap diff after reproducing the growth trigger.");
-  } else if (privateDelta15m >= 192 * 1024 ** 2) {
+  } else if (privateDelta15mValue !== null && privateDelta15m >= 192 * 1024 ** 2) {
     score += 16;
-    reasons.push("Private memory is trending upward over the last 15 minutes.");
-  } else if (privateDelta15m >= 96 * 1024 ** 2) {
+    reasons.push(`Private memory is trending upward ${primaryWindowLabel}.`);
+  } else if (privateDelta15mValue !== null && privateDelta15m >= 96 * 1024 ** 2) {
     score += 8;
     reasons.push("Private memory has a noticeable upward drift.");
+  } else if (privateDelta15mValue === null) {
+    suggestedActions.add("Use vmmap snapshots for dirty/private region confirmation; live ps samples do not expose exact private bytes.");
   }
 
   if (residentDelta15m >= 768 * 1024 ** 2) {
@@ -69,15 +73,17 @@ export function analyzeRisk(series: MemorySample[], options: RiskOptions = {}): 
   }
 
   if (compressedDelta15m >= 128 * 1024 ** 2) {
-    score += 12;
-    reasons.push("Compressed memory is climbing alongside the target.");
-    suggestedActions.add("Watch whether the memory footprint recovers after an idle period.");
+    reasons.push(
+      `System compressed memory also rose ${primaryWindowLabel}; treat this as host pressure context, not target-local leak evidence.`,
+    );
+    suggestedActions.add("Repeat the capture with quieter system load or compare against a control process.");
   }
 
   if (swapDelta15m >= 128 * 1024 ** 2) {
-    score += 18;
-    reasons.push("Swap usage is increasing, which points to real system pressure.");
-    suggestedActions.add("Export a report while swap impact is still visible.");
+    reasons.push(
+      `System swap usage increased ${primaryWindowLabel}; this confirms host pressure but not which process caused it.`,
+    );
+    suggestedActions.add("Export a report while swap impact is visible, but attribute leaks using target RSS and vmmap diffs.");
   }
 
   if (steadyGrowth) {
@@ -89,7 +95,7 @@ export function analyzeRisk(series: MemorySample[], options: RiskOptions = {}): 
     score += 18;
     reasons.push(
       childRunaway.name
-        ? `${childRunaway.name} is growing faster than the rest of the process group.`
+        ? `${childRunaway.name} (${childRunaway.pid}) is growing faster than the rest of the process group.`
         : "A child process is growing faster than the parent group.",
     );
     suggestedActions.add("Inspect the fastest-growing child process separately.");
@@ -111,7 +117,7 @@ export function analyzeRisk(series: MemorySample[], options: RiskOptions = {}): 
 
   score = clamp(score, 0, 100);
   const level = scoreToLevel(score);
-  const verdict = verdictFor(level, childRunaway.deltaBytes > 0, swapDelta15m);
+  const verdict = verdictFor(level, childRunaway.deltaBytes > 0);
 
   suggestedActions.add("Keep claims careful: this is suspicious growth, not proof of a confirmed leak.");
   if (score >= 60) {
@@ -172,6 +178,61 @@ function deltaForWindow(
   return accessor(latest) - accessor(baseline);
 }
 
+function deltaForNullableWindow(
+  series: MemorySample[],
+  windowMs: number,
+  accessor: (sample: MemorySample) => number | null | undefined,
+): number | null {
+  const latest = series.at(-1);
+  if (!latest) {
+    return null;
+  }
+
+  const threshold = latest.capturedAt - windowMs;
+  const baseline = series.find((sample) => sample.capturedAt >= threshold) ?? series[0];
+  if (!baseline) {
+    return null;
+  }
+
+  const latestValue = accessor(latest);
+  const baselineValue = accessor(baseline);
+  if (latestValue === null || latestValue === undefined || baselineValue === null || baselineValue === undefined) {
+    return null;
+  }
+
+  return latestValue - baselineValue;
+}
+
+function describeSeriesWindow(series: MemorySample[], requestedWindowMs: number): string {
+  const first = series[0];
+  const latest = series.at(-1);
+  if (!first || !latest) {
+    return "over the sampled window";
+  }
+
+  const actualWindowMs = latest.capturedAt - first.capturedAt;
+  if (actualWindowMs >= requestedWindowMs * 0.9) {
+    return "over the last 15 minutes";
+  }
+
+  return `over the ${formatShortDuration(actualWindowMs)} sample`;
+}
+
+function formatShortDuration(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  return `${hours}h`;
+}
+
 function monotonicGrowth(
   series: MemorySample[],
   windowMs: number,
@@ -206,33 +267,42 @@ function monotonicGrowth(
   return totalSteps > 0 && upwardSteps / totalSteps >= 0.7;
 }
 
-function detectChildRunaway(series: MemorySample[], windowMs: number): { name: string | null; deltaBytes: number } {
+function detectChildRunaway(
+  series: MemorySample[],
+  windowMs: number,
+): { name: string | null; pid: number | null; deltaBytes: number } {
   const latest = series.at(-1);
   if (!latest) {
-    return { name: null, deltaBytes: 0 };
+    return { name: null, pid: null, deltaBytes: 0 };
   }
 
   const threshold = latest.capturedAt - windowMs;
   const baseline = series.find((sample) => sample.capturedAt >= threshold) ?? series[0];
   if (!baseline) {
-    return { name: null, deltaBytes: 0 };
+    return { name: null, pid: null, deltaBytes: 0 };
   }
 
-  const before = new Map(baseline.childSummaries.map((child) => [child.name, child.rssBytes]));
-  const after = new Map(latest.childSummaries.map((child) => [child.name, child.rssBytes]));
+  const before = new Map(baseline.childSummaries.map((child) => [child.pid, child.rssBytes]));
 
   let dominantName: string | null = null;
+  let dominantPid: number | null = null;
   let dominantDelta = 0;
 
-  for (const [name, afterBytes] of after) {
-    const delta = afterBytes - (before.get(name) ?? 0);
+  for (const child of latest.childSummaries) {
+    const beforeBytes = before.get(child.pid);
+    if (beforeBytes === undefined) {
+      continue;
+    }
+
+    const delta = child.rssBytes - beforeBytes;
     if (delta > dominantDelta) {
       dominantDelta = delta;
-      dominantName = name;
+      dominantName = child.name;
+      dominantPid = child.pid;
     }
   }
 
-  return { name: dominantName, deltaBytes: dominantDelta };
+  return { name: dominantName, pid: dominantPid, deltaBytes: dominantDelta };
 }
 
 function scoreToLevel(score: number): RiskLevel {
@@ -248,12 +318,9 @@ function scoreToLevel(score: number): RiskLevel {
   return "normal";
 }
 
-function verdictFor(level: RiskLevel, childRunaway: boolean, swapDelta15m: number): string {
+function verdictFor(level: RiskLevel, childRunaway: boolean): string {
   if (level === "high" && childRunaway) {
     return "Child process runaway";
-  }
-  if (level === "high" && swapDelta15m > 0) {
-    return "High memory pressure contributor";
   }
   if (level === "high") {
     return "Possible leak pattern";
