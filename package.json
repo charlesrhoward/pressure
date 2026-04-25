@@ -1,6 +1,6 @@
 {
   "name": "@charlesrhoward/pressure",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Terminal-native memory investigation for macOS apps.",
   "license": "MIT",
   "type": "module",
