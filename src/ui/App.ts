@@ -142,6 +142,8 @@ export async function runPressureApp(options: RunPressureAppOptions): Promise<vo
     consoleMode: "disabled",
   });
 
+  renderer.setTerminalTitle("PRESSURE | MEMORY MONITORING");
+
   const store = new TimeSeriesStore();
   const events: string[] = [];
   let searchText = options.initialSelection.search ?? "";
