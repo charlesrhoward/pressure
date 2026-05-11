@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Review dependency changes
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         # TODO: remove continue-on-error after Dependency Graph is enabled in repo settings.
         continue-on-error: true
         with:
