@@ -45,7 +45,7 @@
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
-    "@opentui/core": "^0.1.102"
+    "@opentui/core": "^0.5.1"
   },
   "devDependencies": {
     "@types/bun": "latest",
